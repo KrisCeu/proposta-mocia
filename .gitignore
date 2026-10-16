@@ -218,3 +218,40 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Docker
+docker-compose.override.yml
+docker-compose.*.yml
+.docker/
+*.pid
+.dockerignore.bak
+
+# OS
+.DS_Store
+Thumbs.db
+*.swp
+*~
+
+# IDEs
+.vscode/
+.idea/
+*.sublime-*
+
+# Secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/
+
+# Databases
+*.sqlite3
+*.db
+*.sqlite
+
+# Data (se for gerada localmente)
+data/
+outputs/
+logs/
+*.log
