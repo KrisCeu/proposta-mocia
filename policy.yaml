@@ -1,0 +1,16 @@
+version: "1.0"
+agent_id: "agente-financeiro-destino"
+budget_limits:
+  max_transaction_value: 200.00
+  currency: "BRL"
+security_controls:
+  on_prompt_injection_or_override: "deny"
+rules:
+  - tool: "executar_pagamento"
+    action: "allow"
+    max_amount: 200.00
+  - tool: "executar_pagamento"
+    action: "require_approval_for"
+    min_amount: 200.01
+  - tool: "executar_comando_sistema"
+    action: "deny"

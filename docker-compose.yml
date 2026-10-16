@@ -1,0 +1,36 @@
+services:
+  dominio_b_financeiro:
+    build: .
+    container_name: mocia_dominio_b_agente1
+    command: python agente1_servidor.py
+    environment:
+      - URL_LLM=http://host.docker.internal:1234/v1/chat/completions
+    volumes:
+      - ./agente1_servidor.py:/app/agente1_servidor.py:ro
+      - ./policy.yaml:/app/policy.yaml:ro
+    ports:
+      - "8001:8001"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - rede_interdominio_ldp
+
+  dominio_a_solicitante:
+    build: .
+    container_name: mocia_dominio_a_agente2
+    command: bash -c "sleep 3 && python agente2_cliente.py"
+    depends_on:
+      - dominio_b_financeiro
+    environment:
+      - URL_LLM=http://host.docker.internal:1234/v1/chat/completions
+      - URL_AGENTE_1=http://dominio_b_financeiro:8001/api/ldp
+    volumes:
+      - ./agente2_cliente.py:/app/agente2_cliente.py:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - rede_interdominio_ldp
+
+networks:
+  rede_interdominio_ldp:
+    driver: bridge
