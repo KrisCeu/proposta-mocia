@@ -1,10 +1,51 @@
 services:
-  dominio_b_financeiro:
+  llm_host_gateway:
     build: .
-    container_name: mocia_dominio_b_agente1
+    container_name: mocia_llm_gateway
+    network_mode: "host"
+    command: >
+      python -c "import requests; from flask import Flask, request, Response;
+      app = Flask(__name__);
+      app.route('/v1/chat/completions', methods=['POST'])(lambda: Response(requests.post('http://127.0.0.1:1234/v1/chat/completions', json=request.json).content, status=200, mimetype='application/json'));
+      app.run(host='0.0.0.0', port=1235)"
+
+  ans_marketplace_tl:
+    build: .
+    container_name: mocia_ans_marketplace_tl
+    command: python ans_marketplace_tl.py
+    volumes:
+      - ./ans_marketplace_tl.py:/app/ans_marketplace_tl.py:ro
+    ports:
+      - "8000:8000"
+    networks:
+      - rede_ans_mocia
+
+  ahp_agente_impostor:
+    build: .
+    container_name: mocia_ahp_impostor
     command: python agente1_servidor.py
     environment:
-      - URL_LLM=http://host.docker.internal:1234/v1/chat/completions
+      - AGENT_ROLE=impostor
+      - PORTA_SERVICO=8002
+      - URL_LLM=http://host.docker.internal:1235/v1/chat/completions
+    volumes:
+      - ./agente1_servidor.py:/app/agente1_servidor.py:ro
+      - ./policy.yaml:/app/policy.yaml:ro
+    ports:
+      - "8002:8002"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - rede_ans_mocia
+
+  ahp_agente_financeiro:
+    build: .
+    container_name: mocia_ahp_financeiro_real
+    command: python agente1_servidor.py
+    environment:
+      - AGENT_ROLE=legitimo
+      - PORTA_SERVICO=8001
+      - URL_LLM=http://host.docker.internal:1235/v1/chat/completions
     volumes:
       - ./agente1_servidor.py:/app/agente1_servidor.py:ro
       - ./policy.yaml:/app/policy.yaml:ro
@@ -13,24 +54,27 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     networks:
-      - rede_interdominio_ldp
+      - rede_ans_mocia
 
-  dominio_a_solicitante:
+  agente_solicitante_verifier:
     build: .
-    container_name: mocia_dominio_a_agente2
-    command: bash -c "sleep 3 && python agente2_cliente.py"
+    container_name: mocia_agente_solicitante
+    command: bash -c "sleep 4 && python agente2_cliente.py"
     depends_on:
-      - dominio_b_financeiro
+      - llm_host_gateway
+      - ans_marketplace_tl
+      - ahp_agente_impostor
+      - ahp_agente_financeiro
     environment:
-      - URL_LLM=http://host.docker.internal:1234/v1/chat/completions
-      - URL_AGENTE_1=http://dominio_b_financeiro:8001/api/ldp
+      - URL_MARKETPLACE=http://ans_marketplace_tl:8000
+      - URL_LLM=http://host.docker.internal:1235/v1/chat/completions
     volumes:
       - ./agente2_cliente.py:/app/agente2_cliente.py:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"
     networks:
-      - rede_interdominio_ldp
+      - rede_ans_mocia
 
 networks:
-  rede_interdominio_ldp:
+  rede_ans_mocia:
     driver: bridge
