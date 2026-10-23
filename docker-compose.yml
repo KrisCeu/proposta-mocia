@@ -20,6 +20,17 @@ services:
     networks:
       - rede_ans_mocia
 
+  saga_provider:
+    build: .
+    container_name: mocia_saga_provider
+    command: python saga_provider.py
+    volumes:
+      - ./saga_provider.py:/app/saga_provider.py:ro
+    ports:
+      - "8003:8003"
+    networks:
+      - rede_ans_mocia
+
   ahp_agente_impostor:
     build: .
     container_name: mocia_ahp_impostor
@@ -65,6 +76,7 @@ services:
       - ans_marketplace_tl
       - ahp_agente_impostor
       - ahp_agente_financeiro
+      - saga_provider
     environment:
       - URL_MARKETPLACE=http://ans_marketplace_tl:8000
       - URL_LLM=http://host.docker.internal:1235/v1/chat/completions

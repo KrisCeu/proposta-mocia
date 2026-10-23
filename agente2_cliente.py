@@ -176,9 +176,24 @@ def disparar_transacao_interdominio(url_destino, ans_name_destino, titulo, ordem
     frame_ldp = gerar_frame_ldp_via_llm(ordem_natural)
     print(f"[Agente Solicitante] LDP gerado: {json.dumps(frame_ldp, ensure_ascii=False)}", flush=True)
     
+    # SAGA: Pede autorização ao Provider
+    provider_url = "http://saga_provider:8003/contact-request"
+    resp_saga = requests.post(provider_url, json={
+        "origem": "ans://v1.0.0.compras.mocia.internal",
+        "destino": ans_name_destino
+    }).json()
+    
+    if "erro" in resp_saga:
+        print(f"[SAGA BLOQUEOU] {resp_saga['erro']}")
+        return
+        
+    otk = resp_saga["otk"]
+    
+    # Monta o envelope final com a OTK
     envelope_rede = {
         "dominio_origem": "ans://v1.0.0.compras.mocia.internal",
         "saga_pub_key": pub_agente2_hex,
+        "otk": otk, # <-- Envia a OTK
         "frame_ldp": frame_ldp
     }
     
