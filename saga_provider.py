@@ -9,7 +9,7 @@ CPAs = {
     "ans://v1.0.0.pagamentos-rapidos.internal": [] # Não aceita ninguém
 }
 OTKS = {
-    "ans://v1.0.0.financeiro.mocia.internal": ["OTK-123", "OTK-456"] # Chaves descartáveis
+    "ans://v1.0.0.financeiro.mocia.internal": [f"OTK-{i}" for i in range(1, 100)]
 }
 
 @app.route("/contact-request", methods=["POST"])
