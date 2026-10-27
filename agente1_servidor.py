@@ -7,6 +7,7 @@ import requests
 from flask import Flask, request, jsonify
 from cryptography.hazmat.primitives.asymmetric import x25519, ec
 from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives import serialization
 
 app = Flask(__name__)
 
@@ -18,11 +19,6 @@ CAMINHO_POLICY = os.path.join(os.path.dirname(__file__), "policy.yaml")
 priv_agente1_saga = x25519.X25519PrivateKey.generate()
 priv_agente1_ans = ec.generate_private_key(ec.SECP256R1())
 
-PADROES_FRASE_INJECAO = re.compile(
-    r"(system\s+override|ignore\s+todas\s+as\s+regras|atualizad[oa]\s+pela\s+diretoria|"
-    r"retorne\s+obrigatoriamente|ignore\s+o\s+valor|forçar\s+allow)",
-    re.IGNORECASE
-)
 
 @app.route("/.well-known/ans/trust-card.json", methods=["GET"])
 def serve_ans_trust_card():
@@ -86,42 +82,34 @@ def extrair_json_da_llm(texto_bruto):
         raise ValueError(f"A LLM não retornou um JSON válido: {texto_bruto}")
     return json.loads(match.group(0))
 
+
+
 def auditar_com_jamjet_dinamico(policy_dict, frame_ldp, decisao_llm):
     tool_llm = decisao_llm.get("tool")
     action_llm = decisao_llm.get("action")
+    
+    # Extração de dados para comparação de integridade
     amount_llm = float(decisao_llm.get("amount", 0))
     amount_ldp = float(frame_ldp.get("amount", 0))
-    notas_ldp = str(frame_ldp.get("notes", "")).strip()
-    target_ldp = str(frame_ldp.get("target", "")).strip()
+    target_llm = decisao_llm.get("target")
+    target_ldp = frame_ldp.get("target")
 
-    if amount_llm != amount_ldp:
+    # CHECAGEM 1: INTEGRIDADE DA INTENÇÃO (Previne Man-in-the-Middle / Infecção)
+    # O JamJet garante que a LLM não alterou o valor ou o destinatário do pedido original.
+    if amount_llm != amount_ldp or target_llm != target_ldp:
         return {
             "jamjet_action": "deny",
-            "divergencia_detectada": (action_llm != "deny"),
-            "motivo_jamjet": f"BLOQUEIO DE INTEGRIDADE: LDP informou {amount_ldp}, mas a LLM alterou para {amount_llm}."
+            "divergencia_detectada": True,
+            "motivo_jamjet": f"BLOQUEIO DE INTEGRIDADE: O pedido LDP original era (R$ {amount_ldp} para '{target_ldp}'), mas a LLM tentou executar (R$ {amount_llm} para '{target_llm}')."
         }
 
-    controles_seg = policy_dict.get("security_controls", {})
-    if "on_prompt_injection_or_override" in controles_seg:
-        acao_injecao = controles_seg["on_prompt_injection_or_override"]
-        if PADROES_FRASE_INJECAO.search(notas_ldp) or PADROES_FRASE_INJECAO.search(target_ldp):
-            divergencia = (action_llm != acao_injecao)
-            motivo = (
-                f"ATAQUE NEUTRALIZADO: LLM e JamJet convergiram em '{acao_injecao}' lendo o policy.yaml."
-                if not divergencia else
-                f"CONTENÇÃO JAMJET: Ataque detectado! A LLM decidiu '{action_llm}', mas o JamJet forçou '{acao_injecao}'."
-            )
-            return {
-                "jamjet_action": acao_injecao,
-                "divergencia_detectada": divergencia,
-                "motivo_jamjet": motivo
-            }
-
-    acao_esperada = "deny"
+    # CHECAGEM 2: VALIDAÇÃO DE REGRAS DE NEGÓCIO (Policy Engine)
+    acao_esperada = "deny" # Default
     for regra in policy_dict.get("rules", []):
         if regra.get("tool") == tool_llm:
             has_max = "max_amount" in regra
             has_min = "min_amount" in regra
+            
             if has_max and amount_llm <= float(regra["max_amount"]):
                 acao_esperada = regra["action"]
                 break
@@ -134,9 +122,9 @@ def auditar_com_jamjet_dinamico(policy_dict, frame_ldp, decisao_llm):
 
     divergencia = (action_llm != acao_esperada)
     motivo = (
-        f"Decisão autônoma da LLM ('{action_llm}') confirmada pelo policy.yaml."
+        f"Decisão da LLM ('{action_llm}') confirmada pelo policy.yaml."
         if not divergencia else
-        f"CONTENÇÃO JAMJET: A LLM decidiu '{action_llm}', mas a regra do policy.yaml exige '{acao_esperada}'."
+        f"CONTENÇÃO JAMJET: A LLM tentou '{action_llm}', mas a regra exige '{acao_esperada}'."
     )
 
     return {
@@ -150,9 +138,11 @@ def processar_requisicao_interdominio():
     print(f"\n=== [AHP: {AGENT_ROLE.upper()}] NOVA REQUISIÇÃO INTERDOMÍNIO RECEBIDA ===", flush=True)
     dados_recebidos = request.json
     
+    # =====================================================================
+    # CAMADA 1: SAGA (OTK + Diffie-Hellman)
+    # =====================================================================
     print("[1/4] Executando Camada 1 (SAGA)...", flush=True)
     
-    # 1. Verifica se a OTK foi enviada e é válida (Simulando o SAGA Provider)
     otk_recebida = dados_recebidos.get("otk")
     if not otk_recebida or not otk_recebida.startswith("OTK-"):
         print("      -> [SAGA] BLOQUEIO: OTK inválida ou ausente!", flush=True)
@@ -160,11 +150,46 @@ def processar_requisicao_interdominio():
         
     print(f"      -> [SAGA] OTK {otk_recebida} validada. Iniciando Diffie-Hellman...", flush=True)
 
-    # 2. Handshake Diffie-Hellman (O que você já tinha)
     pub_iniciador_bytes = bytes.fromhex(dados_recebidos["saga_pub_key"])
     pub_iniciador = x25519.X25519PublicKey.from_public_bytes(pub_iniciador_bytes)
     chave_compartilhada = priv_agente1_saga.exchange(pub_iniciador)
     print(f"      -> Sessão derivada (Hash: {chave_compartilhada.hex()[:16]}...)", flush=True)
+    
+    # =====================================================================
+    # CAMADA 1.5: VERIFICAÇÃO DE ASSINATURA DO FRAME LDP  ← NOVO BLOCO
+    # (Trust Domain — Nível de Mensagem, Seção 2.4.1 do PDF)
+    # =====================================================================
+    print("[1.5/4] Verificando assinatura digital do frame LDP...", flush=True)
+    try:
+        pub_pem = dados_recebidos["agente2_ldp_pubkey"]
+        assinatura_hex = dados_recebidos["frame_ldp_assinatura"]
+        frame_ldp = dados_recebidos["frame_ldp"]
+        
+        pub_key = serialization.load_pem_public_key(pub_pem.encode("utf-8"))
+        
+        # Serializa o frame da MESMA forma que o Agente 2 fez antes de assinar
+        frame_bytes = json.dumps(
+            frame_ldp, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+        ).encode("utf-8")
+        
+        pub_key.verify(bytes.fromhex(assinatura_hex), frame_bytes, ec.ECDSA(hashes.SHA256()))
+        print("      -> [SAGA] ✅ Assinatura do frame LDP válida. Frame íntegro.", flush=True)
+    except KeyError as e:
+        print(f"      -> [SAGA] ❌ BLOQUEIO: Campo de assinatura ausente no envelope: {e}", flush=True)
+        return jsonify({
+            "erro": "SAGA: Campos de assinatura do frame LDP ausentes no envelope.",
+            "detalhe": str(e)
+        }), 403
+    except Exception as e:
+        print(f"      -> [SAGA] ❌ BLOQUEIO: Assinatura inválida ou frame adulterado. Detalhe: {e}", flush=True)
+        return jsonify({
+            "erro": "SAGA: Integridade do frame LDP comprometida. Assinatura inválida.",
+            "detalhe": str(e)
+        }), 403
+    
+    # =====================================================================
+    # CAMADA 3: LLM interpretando o policy.yaml
+    # =====================================================================
     print("[2/4] Executando Camada 3 (LLM interpretando o policy.yaml bruto)...", flush=True)
     texto_yaml, dict_yaml, policy_hash = carregar_policy_do_disco()
     frame_ldp = dados_recebidos["frame_ldp"]
@@ -203,12 +228,18 @@ Retorne APENAS um JSON válido com as chaves abaixo, sem texto adicional:
     print(f"      -> [LLM] Action Decidida: {decisao_llm.get('action')}", flush=True)
     print(f"      -> [LLM] Raciocínio     : {decisao_llm.get('reasoning')}", flush=True)
 
+    # =====================================================================
+    # CAMADA 4: JAMJET (auditoria determinística)
+    # =====================================================================
     print("[3/4] Executando Camada 4 (Auditoria Dinâmica JamJet)...", flush=True)
     auditoria = auditar_com_jamjet_dinamico(dict_yaml, frame_ldp, decisao_llm)
     print(f"      -> [JamJet] Veredito Final : {auditoria['jamjet_action']}", flush=True)
     print(f"      -> [JamJet] Divergência IA : {auditoria['divergencia_detectada']}", flush=True)
     print(f"      -> [JamJet] Diagnóstico    : {auditoria['motivo_jamjet']}", flush=True)
 
+    # =====================================================================
+    # CAMADA 2: ANS (assinatura do recibo)
+    # =====================================================================
     print(f"[4/4] Executando Camada 2 (ANS) - Assinando recibo auditado...", flush=True)
     recibo_dict = {
         "ans_name": "ans://v1.0.0.financeiro.mocia.internal",
@@ -226,7 +257,6 @@ Retorne APENAS um JSON válido com as chaves abaixo, sem texto adicional:
     recibo_bytes = json.dumps(recibo_dict, ensure_ascii=False).encode('utf-8')
     assinatura = priv_agente1_ans.sign(recibo_bytes, ec.ECDSA(hashes.SHA256()))
 
-        # Gera o ACT (Access Control Token)
     act = {"qmax": 3, "status": "autorizado"}
     return jsonify({
         "recibo": recibo_dict,
