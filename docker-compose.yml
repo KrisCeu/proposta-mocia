@@ -80,6 +80,7 @@ services:
     environment:
       - URL_MARKETPLACE=http://ans_marketplace_tl:8000
       - URL_LLM=http://host.docker.internal:1235/v1/chat/completions
+      - ONLY_C2=0
     volumes:
       - ./agente2_cliente.py:/app/agente2_cliente.py:ro
     extra_hosts:
