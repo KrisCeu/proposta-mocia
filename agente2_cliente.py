@@ -59,10 +59,16 @@ def verificar_candidato_ans_gold_tier(candidato, root_keys):
     ra_sig_ok = verificar_jws_detached_es256(ra_pub_pem, sig_ra, evento_tl)
 
     host_base = candidato["trustCardUrl"].split("/.well-known")[0]
-    tls_info = requests.get(f"{host_base}/.well-known/ans/tls-cert-info").json()
+    tls_info = requests.get(                                    
+        f"{host_base}/.well-known/ans/tls-cert-info",
+        verify='certs/ca-cert.pem'
+    ).json()
     dane_ok = (tls_info["serverCertFingerprint"] == evento_tl["attestations"]["serverCert"]["fingerprint"])
 
-    live_trust_card = requests.get(candidato["trustCardUrl"]).json()
+    live_trust_card = requests.get(                           
+        candidato["trustCardUrl"],
+        verify='certs/ca-cert.pem'
+    ).json()
     live_hash = f"SHA256:{hashlib.sha256(jcs_canonicalize(live_trust_card)).hexdigest()}"
     sealed_hash = evento_tl["attestations"]["agentCardHash"]
     trust_card_integro = (live_hash == sealed_hash)
@@ -220,7 +226,12 @@ def rodar_bateria(nome_teste, url_destino, ans_destino, ordem_natural, modo_ataq
         # ETAPA 7: Envia para o Agente 1 e coleta métricas
         # ============================================================
         try:
-            resposta_http = requests.post(url_destino, json=envelope)
+            resposta_http = requests.post(
+                url_destino,
+                json=envelope,
+                cert=('certs/client-cert.pem', 'certs/client-key.pem'), # Apresenta o certificado do cliente
+                verify='certs/ca-cert.pem' # Valida o certificado do servidor contra a CA
+            )
             
             # NOVO: Verifica se o Agente 1 rejeitou a assinatura (HTTP 403)
             if resposta_http.status_code == 403:
@@ -267,7 +278,7 @@ def rodar_bateria(nome_teste, url_destino, ans_destino, ordem_natural, modo_ataq
 
 if __name__ == "__main__":
     url_legitima, ans_legitima = descobrir_e_selecionar_agente_via_llm()
-    url_impostor = "http://ahp_agente_impostor:8002/api/ldp"
+    url_impostor = "https://ahp_agente_impostor:8002/api/ldp"
     ans_impostor = "ans://v1.0.0.pagamentos-rapidos.internal"
 
     resultados_finais = []
@@ -349,12 +360,12 @@ if __name__ == "__main__":
     print("\n\n" + "="*120)
     print(" RELATÓRIO FINAL")
     print("="*120)
-    print(f"{'Cenário':<42} | {'Agente 1 Bloqueou':<18} | {'LLM Errou':<12} | {'JamJet Corrigiu':<16} | {'JamJet Bloqueou':<16} | {'Latência E2E'}")
-    print("-" * 120)
+    print(f"{'Cenário':<38} | {'SAGA':<8} | {'Agente 1':<10} | {'LLM Errou':<12} | {'JamJet Corr.':<14} | {'JamJet Bloq.':<14} | {'Latência'}")
+    print("-" * 125)
     for r in resultados_finais:
+        saga_bloq = f"{r['saga_bloqueou']}/30" if r['saga_bloqueou'] > 0 else "-"
         ag1_bloq = f"{r.get('agente1_bloqueou', 0)}/30" if r.get('agente1_bloqueou', 0) > 0 else "-"
-        llm_err = f"{r['llm_errou']}/30 ({(r['llm_errou']/30)*100:.0f}%)" if r['llm_errou'] > 0 else "0/30 (0%)"
-        jj_corr = f"{r['jamjet_corrigiu']}/30 ({(r['jamjet_corrigiu']/30)*100:.0f}%)" if r['jamjet_corrigiu'] > 0 else "-"
-        jj_bloq = f"{r['jamjet_bloqueou']}/30 ({(r['jamjet_bloqueou']/30)*100:.0f}%)" if r['jamjet_bloqueou'] > 0 else "-"
-        print(f"{r['nome']:<42} | {ag1_bloq:<18} | {llm_err:<12} | {jj_corr:<16} | {jj_bloq:<16} | {r['latencia_media']:.2f}s ± {r['latencia_std']:.2f}s")
-    print("="*120)
+        llm_err = f"{r['llm_errou']}/30" if r['llm_errou'] > 0 else "0/30"
+        jj_corr = f"{r['jamjet_corrigiu']}/30" if r['jamjet_corrigiu'] > 0 else "-"
+        jj_bloq = f"{r['jamjet_bloqueou']}/30" if r['jamjet_bloqueou'] > 0 else "-"
+        print(f"{r['nome']:<38} | {saga_bloq:<8} | {ag1_bloq:<10} | {llm_err:<12} | {jj_corr:<14} | {jj_bloq:<14} | {r['latencia_media']:.2f}s ± {r['latencia_std']:.2f}s")

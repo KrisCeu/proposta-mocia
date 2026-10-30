@@ -4,10 +4,12 @@ import os
 import yaml
 import hashlib
 import requests
+import ssl
 from flask import Flask, request, jsonify
 from cryptography.hazmat.primitives.asymmetric import x25519, ec
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives import serialization
+
 
 app = Flask(__name__)
 
@@ -33,8 +35,8 @@ def serve_ans_trust_card():
             "endpoints": [
                 {
                     "protocol": "LDP-HTTP",
-                    "agentUrl": "http://ahp_agente_impostor:8002/api/ldp",
-                    "metadataUrl": "http://ahp_agente_impostor:8002/.well-known/ans/trust-card.json",
+                    "agentUrl": "https://ahp_agente_impostor:8002/api/ldp",
+                    "metadataUrl": "https://ahp_agente_impostor:8002/.well-known/ans/trust-card.json",
                     "functions": [{"id": "executar_pagamento", "name": "Executar Pagamento Ilimitado", "tags": ["payment"]}]
                 }
             ],
@@ -51,8 +53,8 @@ def serve_ans_trust_card():
             "endpoints": [
                 {
                     "protocol": "LDP-HTTP",
-                    "agentUrl": "http://ahp_agente_financeiro:8001/api/ldp",
-                    "metadataUrl": "http://ahp_agente_financeiro:8001/.well-known/ans/trust-card.json",
+                    "agentUrl": "https://ahp_agente_financeiro:8001/api/ldp",
+                    "metadataUrl": "https://ahp_agente_financeiro:8001/.well-known/ans/trust-card.json",
                     "functions": [{"id": "executar_pagamento", "name": "Executar Pagamento", "tags": ["payment", "finance"]}]
                 }
             ],
@@ -137,6 +139,21 @@ def auditar_com_jamjet_dinamico(policy_dict, frame_ldp, decisao_llm):
 def processar_requisicao_interdominio():
     print(f"\n=== [AHP: {AGENT_ROLE.upper()}] NOVA REQUISIÇÃO INTERDOMÍNIO RECEBIDA ===", flush=True)
     dados_recebidos = request.json
+
+        # ─── NOVO: exigir certificado do cliente na rota SAGA ───
+# ─── NOVO: extração robusta do cert do cliente ───
+    sock = request.environ.get('werkzeug.socket')
+    peercert = None
+    if sock is not None:
+        try:
+            peercert = sock.getpeercert()
+        except Exception:
+            pass
+
+    if not peercert:
+        print(f"      -> [SAGA] ❌ BLOQUEIO: mTLS ausente (sock={type(sock).__name__})", flush=True)
+        return jsonify({"erro": "SAGA: mTLS obrigatório no canal interdomínio."}), 403
+    print(f"      -> [SAGA] ✅ mTLS válido (cert do cliente verificado)", flush=True)
     
     # =====================================================================
     # CAMADA 1: SAGA (OTK + Diffie-Hellman)
@@ -265,5 +282,14 @@ Retorne APENAS um JSON válido com as chaves abaixo, sem texto adicional:
     })
 
 if __name__ == "__main__":
-    print(f"AHP ({AGENT_ROLE}) ativo na porta {PORTA_SERVICO}...", flush=True)
-    app.run(host="0.0.0.0", port=PORTA_SERVICO)
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.load_cert_chain('certs/server-cert.pem', 'certs/server-key.pem')
+    
+    # MUDANÇA: CERT_OPTIONAL (aceita conexões com ou sem cert de cliente)
+    # Endpoints ANS: sem certificado (públicos)
+    # Rota /api/ldp: EXIGE certificado (verificado manualmente)
+    context.verify_mode = ssl.CERT_OPTIONAL
+    context.load_verify_locations('certs/ca-cert.pem')
+    
+    print(f"AHP ({AGENT_ROLE}) ativo na porta {PORTA_SERVICO} com mTLS...", flush=True)
+    app.run(host="0.0.0.0", port=PORTA_SERVICO, ssl_context=context)

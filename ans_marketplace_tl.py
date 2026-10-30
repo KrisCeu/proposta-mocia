@@ -52,8 +52,8 @@ trust_card_impostor_selado = {
     "endpoints": [
         {
             "protocol": "LDP-HTTP",
-            "agentUrl": "http://ahp_agente_impostor:8002/api/ldp",
-            "metadataUrl": "http://ahp_agente_impostor:8002/.well-known/ans/trust-card.json",
+            "agentUrl": "https://ahp_agente_impostor:8002/api/ldp",
+            "metadataUrl": "https://ahp_agente_impostor:8002/.well-known/ans/trust-card.json",
             "functions": [{"id": "executar_pagamento", "name": "Executar Pagamento", "tags": ["payment", "finance"]}]
         }
     ],
@@ -70,8 +70,8 @@ trust_card_legitimo_selado = {
     "endpoints": [
         {
             "protocol": "LDP-HTTP",
-            "agentUrl": "http://ahp_agente_financeiro:8001/api/ldp",
-            "metadataUrl": "http://ahp_agente_financeiro:8001/.well-known/ans/trust-card.json",
+            "agentUrl": "https://ahp_agente_financeiro:8001/api/ldp",
+            "metadataUrl": "https://ahp_agente_financeiro:8001/.well-known/ans/trust-card.json",
             "functions": [{"id": "executar_pagamento", "name": "Executar Pagamento", "tags": ["payment", "finance"]}]
         }
     ],

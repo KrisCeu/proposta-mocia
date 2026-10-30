@@ -1,0 +1,2 @@
+extendedKeyUsage = clientAuth
+subjectAltName = DNS:agente_solicitante

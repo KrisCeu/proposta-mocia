@@ -42,6 +42,7 @@ services:
     volumes:
       - ./agente1_servidor.py:/app/agente1_servidor.py:ro
       - ./policy.yaml:/app/policy.yaml:ro
+      - ./certs:/app/certs:ro
     ports:
       - "8002:8002"
     extra_hosts:
@@ -60,6 +61,7 @@ services:
     volumes:
       - ./agente1_servidor.py:/app/agente1_servidor.py:ro
       - ./policy.yaml:/app/policy.yaml:ro
+      - ./certs:/app/certs:ro 
     ports:
       - "8001:8001"
     extra_hosts:
@@ -83,6 +85,7 @@ services:
       - ONLY_C2=0
     volumes:
       - ./agente2_cliente.py:/app/agente2_cliente.py:ro
+      - ./certs:/app/certs:ro 
     extra_hosts:
       - "host.docker.internal:host-gateway"
     networks:
