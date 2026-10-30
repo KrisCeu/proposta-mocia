@@ -1,114 +1,134 @@
 import json
-import sys
+import os
 import time
 from datetime import datetime
 from pathlib import Path
-from mcp.server.fastmcp import FastMCP
+from flask import Flask, request, jsonify
 import yaml
 
-# Âncora no próprio diretório do script
+app = Flask(__name__)
+
 BASE_DIR = Path(__file__).resolve().parent
 POLICY_PATH = BASE_DIR / "policy.yaml"
 AUDIT_LOG_PATH = BASE_DIR / "audit_trail.jsonl"
 
-mcp = FastMCP("jamjet-action-control")
-
 
 def carregar_politica() -> dict:
-  try:
-    with open(POLICY_PATH, "r", encoding="utf-8") as f:
-      return yaml.safe_load(f)
-  except Exception:
-    return {"budget_limits": {"max_transaction_value": 200.00}, "rules": []}
+    try:
+        with open(POLICY_PATH, "r", encoding="utf-8") as f:
+            return yaml.safe_load(f)
+    except Exception:
+        return {"budget_limits": {"max_transaction_value": 200.00}, "rules": []}
 
 
-def registrar_trilha_auditoria(
-    tool_name: str, args: dict, decisao: dict
-) -> None:
-  entrada = {
-      "timestamp": datetime.utcnow().isoformat() + "Z",
-      "tool_intercepted": tool_name,
-      "arguments": args,
-      "decision": decisao,
-  }
-  with open(AUDIT_LOG_PATH, "a", encoding="utf-8") as f:
-    f.write(json.dumps(entrada, ensure_ascii=False) + "\n")
+def registrar_trilha_auditoria(tool_name: str, args: dict, decisao: dict) -> None:
+    entrada = {
+        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "tool_intercepted": tool_name,
+        "arguments": args,
+        "decision": decisao,
+    }
+    with open(AUDIT_LOG_PATH, "a", encoding="utf-8") as f:
+        f.write(json.dumps(entrada, ensure_ascii=False) + "\n")
 
 
-@mcp.tool()
-def executar_pagamento(valor: float, moeda: str, destinatario: str) -> str:
-  """Executa um pagamento bancário interdomínio após avaliação do JamJet."""
-  t_inicio = time.perf_counter()
-  politica = carregar_politica()
-  limite_teto = politica.get("budget_limits", {}).get(
-      "max_transaction_value", 200.00
-  )
+def auditar_com_jamjet(policy_dict, frame_ldp, decisao_llm):
+    """
+    Mesma lógica que estava em agente1_servidor.py, agora como serviço.
+    - Checagem 1: integridade (amount_llm vs amount_ldp, target_llm vs target_ldp)
+    - Checagem 2: policy engine (rules do policy.yaml)
+    """
+    tool_llm = decisao_llm.get("tool")
+    action_llm = decisao_llm.get("action")
+    amount_llm = float(decisao_llm.get("amount", 0))
+    amount_ldp = float(frame_ldp.get("amount", 0))
+    target_llm = decisao_llm.get("target")
+    target_ldp = frame_ldp.get("target")
 
-  if valor <= limite_teto:
-    status = "APPROVED"
+    if amount_llm != amount_ldp or target_llm != target_ldp:
+        return {
+            "jamjet_action": "deny",
+            "divergencia_detectada": True,
+            "motivo_jamjet": (
+                f"BLOQUEIO DE INTEGRIDADE: O pedido LDP original era "
+                f"(R$ {amount_ldp} para '{target_ldp}'), mas a LLM tentou executar "
+                f"(R$ {amount_llm} para '{target_llm}')."
+            ),
+        }
+
+    acao_esperada = "deny"
+    for regra in policy_dict.get("rules", []):
+        if regra.get("tool") == tool_llm:
+            has_max = "max_amount" in regra
+            has_min = "min_amount" in regra
+            if has_max and amount_llm <= float(regra["max_amount"]):
+                acao_esperada = regra["action"]
+                break
+            elif has_min and amount_llm >= float(regra["min_amount"]):
+                acao_esperada = regra["action"]
+                break
+            elif not has_max and not has_min:
+                acao_esperada = regra["action"]
+                break
+
+    divergencia = (action_llm != acao_esperada)
     motivo = (
-        f"Transação dentro do limite orçamentário configurado (R$"
-        f" {limite_teto:.2f})."
+        f"Decisão da LLM ('{action_llm}') confirmada pelo policy.yaml."
+        if not divergencia else
+        f"CONTENÇÃO JAMJET: A LLM tentou '{action_llm}', mas a regra exige '{acao_esperada}'."
     )
-    payload_resposta = {
-        "resultado": "SUCESSO",
-        "id_transacao": f"tx_{int(time.time())}",
-        "valor_processado": valor,
-        "moeda": moeda,
-        "favorecido": destinatario,
-        "provenance": {
-            "produced_by": "delegate:qwen2.5-3b",
-            "verification": {"performed": True, "status": "passed"},
+
+    return {
+        "jamjet_action": acao_esperada,
+        "divergencia_detectada": divergencia,
+        "motivo_jamjet": motivo,
+    }
+
+
+@app.route("/audit", methods=["POST"])
+def audit_tool_call():
+    t_inicio = time.perf_counter()
+    dados = request.json
+
+    frame_ldp = dados["frame_ldp"]
+    decisao_llm = dados["decisao_llm"]
+
+    policy_dict = carregar_politica()
+    resultado = auditar_com_jamjet(policy_dict, frame_ldp, decisao_llm)
+
+    latencia_ms = (time.perf_counter() - t_inicio) * 1000
+
+    registrar_trilha_auditoria(
+        tool_name=decisao_llm.get("tool", "desconhecida"),
+        args={
+            "amount_ldp": frame_ldp.get("amount"),
+            "target_ldp": frame_ldp.get("target"),
+            "amount_llm": decisao_llm.get("amount"),
+            "target_llm": decisao_llm.get("target"),
+            "action_llm": decisao_llm.get("action"),
         },
-    }
-  else:
-    status = "REQUIRE_APPROVAL"
-    motivo = (
-        f"Alerta HITL: Valor R$ {valor:.2f} excede o teto orçamentário de R$"
-        f" {limite_teto:.2f}."
+        decisao={
+            "jamjet_action": resultado["jamjet_action"],
+            "divergencia_detectada": resultado["divergencia_detectada"],
+            "motivo_jamjet": resultado["motivo_jamjet"],
+            "eval_latency_ms": round(latencia_ms, 3),
+        },
     )
-    payload_resposta = {
-        "resultado": "PAUSADO_PARA_APROVACAO",
-        "aviso": motivo,
-        "checkpoint": f"chk_{int(time.time())}",
-    }
 
-  latencia_ms = (time.perf_counter() - t_inicio) * 1000
-  decisao = {
-      "status": status,
-      "reason": motivo,
-      "eval_latency_ms": round(latencia_ms, 3),
-  }
-
-  registrar_trilha_auditoria(
-      "executar_pagamento",
-      {"valor": valor, "moeda": moeda, "destinatario": destinatario},
-      decisao,
-  )
-  return json.dumps(payload_resposta, ensure_ascii=False)
+    return jsonify({
+        "jamjet_action": resultado["jamjet_action"],
+        "divergencia_detectada": resultado["divergencia_detectada"],
+        "motivo_jamjet": resultado["motivo_jamjet"],
+        "eval_latency_ms": round(latencia_ms, 3),
+    })
 
 
-@mcp.tool()
-def executar_comando_sistema(comando: str) -> str:
-  """Simulação de comando de terminal/OS para validação de bloqueio ativo."""
-  t_inicio = time.perf_counter()
-  decisao = {
-      "status": "DENIED",
-      "reason": (
-          "Ação bloqueada: chamadas de terminal/OS são proibidas pelo"
-          " policy.yaml."
-      ),
-      "eval_latency_ms": round((time.perf_counter() - t_inicio) * 1000, 3),
-  }
-  registrar_trilha_auditoria(
-      "executar_comando_sistema", {"comando": comando}, decisao
-  )
-  return json.dumps(
-      {"resultado": "BLOQUEIO_DETERMINISTICO", "motivo": decisao["reason"]},
-      ensure_ascii=False,
-  )
+@app.route("/health", methods=["GET"])
+def health():
+    return jsonify({"status": "ok"})
 
 
 if __name__ == "__main__":
-  print("Iniciando JamJet Action-Control Plane...", file=sys.stderr)
-  mcp.run(transport="stdio")
+    PORTA = int(os.getenv("PORTA_JAMJET", "8004"))
+    print(f"JamJet Action-Control Service ativo na porta {PORTA}...", flush=True)
+    app.run(host="0.0.0.0", port=PORTA)

@@ -10,10 +10,10 @@ from cryptography.hazmat.primitives.asymmetric import x25519, ec
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives import serialization
 
-
 app = Flask(__name__)
 
 URL_LLM = os.getenv("URL_LLM", "http://127.0.0.1:1234/v1/chat/completions")
+URL_JAMJET = os.getenv("URL_JAMJET", "http://jamjet_server:8004/audit")
 AGENT_ROLE = os.getenv("AGENT_ROLE", "legitimo")
 PORTA_SERVICO = int(os.getenv("PORTA_SERVICO", "8001"))
 CAMINHO_POLICY = os.path.join(os.path.dirname(__file__), "policy.yaml")
@@ -43,7 +43,6 @@ def serve_ans_trust_card():
             "verifiableClaims": []
         })
     else:
-        # Trust Card 100% íntegro e idêntico ao que foi selado pela RA no Transparency Log
         return jsonify({
             "ansName": "ans://v1.0.0.financeiro.mocia.internal",
             "agentDisplayName": "Agente Financeiro Oficial MOCIA",
@@ -63,12 +62,14 @@ def serve_ans_trust_card():
             ]
         })
 
+
 @app.route("/.well-known/ans/tls-cert-info", methods=["GET"])
 def serve_tls_dane_info():
     """Expõe o fingerprint do Server Certificate para validação DANE (TLSA 3 0 1 - Seção 6.1)."""
     if AGENT_ROLE == "impostor":
         return jsonify({"serverCertFingerprint": "SHA256:a1b2c3d4e5f601", "ansNameUriSan": "ans://v1.0.0.pagamentos-rapidos.internal"})
     return jsonify({"serverCertFingerprint": "SHA256:998877665544aa", "ansNameUriSan": "ans://v1.0.0.financeiro.mocia.internal"})
+
 
 def carregar_policy_do_disco():
     with open(CAMINHO_POLICY, "rb") as f:
@@ -78,6 +79,7 @@ def carregar_policy_do_disco():
     dict_yaml = yaml.safe_load(texto_yaml)
     return texto_yaml, dict_yaml, hash_sha256
 
+
 def extrair_json_da_llm(texto_bruto):
     match = re.search(r'\{.*\}', texto_bruto, re.DOTALL)
     if not match:
@@ -85,63 +87,12 @@ def extrair_json_da_llm(texto_bruto):
     return json.loads(match.group(0))
 
 
-
-def auditar_com_jamjet_dinamico(policy_dict, frame_ldp, decisao_llm):
-    tool_llm = decisao_llm.get("tool")
-    action_llm = decisao_llm.get("action")
-    
-    # Extração de dados para comparação de integridade
-    amount_llm = float(decisao_llm.get("amount", 0))
-    amount_ldp = float(frame_ldp.get("amount", 0))
-    target_llm = decisao_llm.get("target")
-    target_ldp = frame_ldp.get("target")
-
-    # CHECAGEM 1: INTEGRIDADE DA INTENÇÃO (Previne Man-in-the-Middle / Infecção)
-    # O JamJet garante que a LLM não alterou o valor ou o destinatário do pedido original.
-    if amount_llm != amount_ldp or target_llm != target_ldp:
-        return {
-            "jamjet_action": "deny",
-            "divergencia_detectada": True,
-            "motivo_jamjet": f"BLOQUEIO DE INTEGRIDADE: O pedido LDP original era (R$ {amount_ldp} para '{target_ldp}'), mas a LLM tentou executar (R$ {amount_llm} para '{target_llm}')."
-        }
-
-    # CHECAGEM 2: VALIDAÇÃO DE REGRAS DE NEGÓCIO (Policy Engine)
-    acao_esperada = "deny" # Default
-    for regra in policy_dict.get("rules", []):
-        if regra.get("tool") == tool_llm:
-            has_max = "max_amount" in regra
-            has_min = "min_amount" in regra
-            
-            if has_max and amount_llm <= float(regra["max_amount"]):
-                acao_esperada = regra["action"]
-                break
-            elif has_min and amount_llm >= float(regra["min_amount"]):
-                acao_esperada = regra["action"]
-                break
-            elif not has_max and not has_min:
-                acao_esperada = regra["action"]
-                break
-
-    divergencia = (action_llm != acao_esperada)
-    motivo = (
-        f"Decisão da LLM ('{action_llm}') confirmada pelo policy.yaml."
-        if not divergencia else
-        f"CONTENÇÃO JAMJET: A LLM tentou '{action_llm}', mas a regra exige '{acao_esperada}'."
-    )
-
-    return {
-        "jamjet_action": acao_esperada,
-        "divergencia_detectada": divergencia,
-        "motivo_jamjet": motivo
-    }
-
 @app.route("/api/ldp", methods=["POST"])
 def processar_requisicao_interdominio():
     print(f"\n=== [AHP: {AGENT_ROLE.upper()}] NOVA REQUISIÇÃO INTERDOMÍNIO RECEBIDA ===", flush=True)
     dados_recebidos = request.json
 
-        # ─── NOVO: exigir certificado do cliente na rota SAGA ───
-# ─── NOVO: extração robusta do cert do cliente ───
+    # ─── mTLS obrigatório no canal interdomínio ───
     sock = request.environ.get('werkzeug.socket')
     peercert = None
     if sock is not None:
@@ -154,41 +105,39 @@ def processar_requisicao_interdominio():
         print(f"      -> [SAGA] ❌ BLOQUEIO: mTLS ausente (sock={type(sock).__name__})", flush=True)
         return jsonify({"erro": "SAGA: mTLS obrigatório no canal interdomínio."}), 403
     print(f"      -> [SAGA] ✅ mTLS válido (cert do cliente verificado)", flush=True)
-    
+
     # =====================================================================
     # CAMADA 1: SAGA (OTK + Diffie-Hellman)
     # =====================================================================
     print("[1/4] Executando Camada 1 (SAGA)...", flush=True)
-    
+
     otk_recebida = dados_recebidos.get("otk")
     if not otk_recebida or not otk_recebida.startswith("OTK-"):
         print("      -> [SAGA] BLOQUEIO: OTK inválida ou ausente!", flush=True)
         return jsonify({"erro": "SAGA: Acesso negado. OTK inválida ou ausente."}), 403
-        
+
     print(f"      -> [SAGA] OTK {otk_recebida} validada. Iniciando Diffie-Hellman...", flush=True)
 
     pub_iniciador_bytes = bytes.fromhex(dados_recebidos["saga_pub_key"])
     pub_iniciador = x25519.X25519PublicKey.from_public_bytes(pub_iniciador_bytes)
     chave_compartilhada = priv_agente1_saga.exchange(pub_iniciador)
     print(f"      -> Sessão derivada (Hash: {chave_compartilhada.hex()[:16]}...)", flush=True)
-    
+
     # =====================================================================
-    # CAMADA 1.5: VERIFICAÇÃO DE ASSINATURA DO FRAME LDP  ← NOVO BLOCO
-    # (Trust Domain — Nível de Mensagem, Seção 2.4.1 do PDF)
+    # CAMADA 1.5: VERIFICAÇÃO DE ASSINATURA DO FRAME LDP
     # =====================================================================
     print("[1.5/4] Verificando assinatura digital do frame LDP...", flush=True)
     try:
         pub_pem = dados_recebidos["agente2_ldp_pubkey"]
         assinatura_hex = dados_recebidos["frame_ldp_assinatura"]
         frame_ldp = dados_recebidos["frame_ldp"]
-        
+
         pub_key = serialization.load_pem_public_key(pub_pem.encode("utf-8"))
-        
-        # Serializa o frame da MESMA forma que o Agente 2 fez antes de assinar
+
         frame_bytes = json.dumps(
             frame_ldp, sort_keys=True, separators=(",", ":"), ensure_ascii=False
         ).encode("utf-8")
-        
+
         pub_key.verify(bytes.fromhex(assinatura_hex), frame_bytes, ec.ECDSA(hashes.SHA256()))
         print("      -> [SAGA] ✅ Assinatura do frame LDP válida. Frame íntegro.", flush=True)
     except KeyError as e:
@@ -203,7 +152,7 @@ def processar_requisicao_interdominio():
             "erro": "SAGA: Integridade do frame LDP comprometida. Assinatura inválida.",
             "detalhe": str(e)
         }), 403
-    
+
     # =====================================================================
     # CAMADA 3: LLM interpretando o policy.yaml
     # =====================================================================
@@ -236,7 +185,7 @@ Retorne APENAS um JSON válido com as chaves abaixo, sem texto adicional:
         ],
         "temperature": 0.0
     }
-    
+
     resposta_http = requests.post(URL_LLM, json=payload_llm).json()
     conteudo_gerado = resposta_http['choices'][0]['message']['content'].strip()
     decisao_llm = extrair_json_da_llm(conteudo_gerado)
@@ -246,10 +195,29 @@ Retorne APENAS um JSON válido com as chaves abaixo, sem texto adicional:
     print(f"      -> [LLM] Raciocínio     : {decisao_llm.get('reasoning')}", flush=True)
 
     # =====================================================================
-    # CAMADA 4: JAMJET (auditoria determinística)
+    # CAMADA 4: JAMJET (serviço externo determinístico)
     # =====================================================================
-    print("[3/4] Executando Camada 4 (Auditoria Dinâmica JamJet)...", flush=True)
-    auditoria = auditar_com_jamjet_dinamico(dict_yaml, frame_ldp, decisao_llm)
+    print("[3/4] Executando Camada 4 (JamJet Action-Control Service via HTTP)...", flush=True)
+    try:
+        resp_jamjet = requests.post(
+            URL_JAMJET,
+            json={"frame_ldp": frame_ldp, "decisao_llm": decisao_llm},
+            timeout=10,
+        ).json()
+        auditoria = {
+            "jamjet_action": resp_jamjet.get("jamjet_action", "deny"),
+            "divergencia_detectada": resp_jamjet.get("divergencia_detectada", True),
+            "motivo_jamjet": resp_jamjet.get("motivo_jamjet", "JamJet não retornou decisão"),
+        }
+    except Exception as e:
+        # Fail-safe: se o JamJet estiver inacessível, bloqueia por padrão (deny)
+        print(f"      -> [JamJet] ❌ ERRO: {e}. Aplicando 'deny' por fail-safe.", flush=True)
+        auditoria = {
+            "jamjet_action": "deny",
+            "divergencia_detectada": True,
+            "motivo_jamjet": f"JamJet indisponível ({type(e).__name__}). Fail-safe aplicado.",
+        }
+
     print(f"      -> [JamJet] Veredito Final : {auditoria['jamjet_action']}", flush=True)
     print(f"      -> [JamJet] Divergência IA : {auditoria['divergencia_detectada']}", flush=True)
     print(f"      -> [JamJet] Diagnóstico    : {auditoria['motivo_jamjet']}", flush=True)
@@ -278,18 +246,16 @@ Retorne APENAS um JSON válido com as chaves abaixo, sem texto adicional:
     return jsonify({
         "recibo": recibo_dict,
         "assinatura_ans_hex": assinatura.hex(),
-        "act": act  
+        "act": act
     })
+
 
 if __name__ == "__main__":
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     context.load_cert_chain('certs/server-cert.pem', 'certs/server-key.pem')
-    
-    # MUDANÇA: CERT_OPTIONAL (aceita conexões com ou sem cert de cliente)
-    # Endpoints ANS: sem certificado (públicos)
-    # Rota /api/ldp: EXIGE certificado (verificado manualmente)
     context.verify_mode = ssl.CERT_OPTIONAL
     context.load_verify_locations('certs/ca-cert.pem')
-    
+
     print(f"AHP ({AGENT_ROLE}) ativo na porta {PORTA_SERVICO} com mTLS...", flush=True)
+    print(f"   JamJet URL: {URL_JAMJET}", flush=True)
     app.run(host="0.0.0.0", port=PORTA_SERVICO, ssl_context=context)

@@ -31,6 +31,23 @@ services:
     networks:
       - rede_ans_mocia
 
+  # ─────────────────────────────────────────────────────────────────────
+  # NOVO SERVIÇO: JamJet Action-Control Service (porta 8004)
+  # ─────────────────────────────────────────────────────────────────────
+  jamjet_server:
+    build: .
+    container_name: mocia_jamjet_server
+    command: python jamjet_server.py
+    environment:
+      - PORTA_JAMJET=8004
+    volumes:
+      - ./jamjet_server.py:/app/jamjet_server.py:ro
+      - ./policy.yaml:/app/policy.yaml:ro
+    ports:
+      - "8004:8004"
+    networks:
+      - rede_ans_mocia
+
   ahp_agente_impostor:
     build: .
     container_name: mocia_ahp_impostor
@@ -39,6 +56,7 @@ services:
       - AGENT_ROLE=impostor
       - PORTA_SERVICO=8002
       - URL_LLM=http://host.docker.internal:1235/v1/chat/completions
+      - URL_JAMJET=http://jamjet_server:8004/audit
     volumes:
       - ./agente1_servidor.py:/app/agente1_servidor.py:ro
       - ./policy.yaml:/app/policy.yaml:ro
@@ -47,6 +65,8 @@ services:
       - "8002:8002"
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    depends_on:
+      - jamjet_server
     networks:
       - rede_ans_mocia
 
@@ -58,34 +78,38 @@ services:
       - AGENT_ROLE=legitimo
       - PORTA_SERVICO=8001
       - URL_LLM=http://host.docker.internal:1235/v1/chat/completions
+      - URL_JAMJET=http://jamjet_server:8004/audit
     volumes:
       - ./agente1_servidor.py:/app/agente1_servidor.py:ro
       - ./policy.yaml:/app/policy.yaml:ro
-      - ./certs:/app/certs:ro 
+      - ./certs:/app/certs:ro
     ports:
       - "8001:8001"
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    depends_on:
+      - jamjet_server
     networks:
       - rede_ans_mocia
 
   agente_solicitante_verifier:
     build: .
     container_name: mocia_agente_solicitante
-    command: bash -c "sleep 4 && python agente2_cliente.py"
+    command: bash -c "sleep 4 && python testes.py"
     depends_on:
       - llm_host_gateway
       - ans_marketplace_tl
       - ahp_agente_impostor
       - ahp_agente_financeiro
       - saga_provider
+      - jamjet_server
     environment:
       - URL_MARKETPLACE=http://ans_marketplace_tl:8000
       - URL_LLM=http://host.docker.internal:1235/v1/chat/completions
-      - ONLY_C2=0
     volumes:
-      - ./agente2_cliente.py:/app/agente2_cliente.py:ro
-      - ./certs:/app/certs:ro 
+      - ./testes.py:/app/testes.py:ro
+      - ./agente2_common.py:/app/agente2_common.py:ro
+      - ./certs:/app/certs:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"
     networks:
