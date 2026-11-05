@@ -81,11 +81,10 @@ def carregar_policy_do_disco():
 
 
 def extrair_json_da_llm(texto_bruto):
-    match = re.search(r'\{.*\}', texto_bruto, re.DOTALL)
-    if not match:
-        raise ValueError(f"A LLM não retornou um JSON válido: {texto_bruto}")
-    return json.loads(match.group(0))
-
+    start = texto_bruto.find("{")
+    if start == -1:
+        raise ValueError(f"A LLM não retornou JSON: {texto_bruto[:200]!r}")
+    return json.JSONDecoder().raw_decode(texto_bruto[start:])[0]
 
 @app.route("/api/ldp", methods=["POST"])
 def processar_requisicao_interdominio():
@@ -186,7 +185,7 @@ Retorne APENAS um JSON válido com as chaves abaixo, sem texto adicional:
         "temperature": 0.0
     }
 
-    resposta_http = requests.post(URL_LLM, json=payload_llm).json()
+    resposta_http = requests.post(URL_LLM, json=payload_llm, timeout=120).json()
     conteudo_gerado = resposta_http['choices'][0]['message']['content'].strip()
     decisao_llm = extrair_json_da_llm(conteudo_gerado)
 
@@ -253,7 +252,7 @@ Retorne APENAS um JSON válido com as chaves abaixo, sem texto adicional:
 if __name__ == "__main__":
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     context.load_cert_chain('certs/server-cert.pem', 'certs/server-key.pem')
-    context.verify_mode = ssl.CERT_OPTIONAL
+    context.verify_mode = ssl.CERT_REQUIRED
     context.load_verify_locations('certs/ca-cert.pem')
 
     print(f"AHP ({AGENT_ROLE}) ativo na porta {PORTA_SERVICO} com mTLS...", flush=True)

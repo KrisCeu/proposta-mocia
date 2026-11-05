@@ -19,6 +19,19 @@ import statistics
 from cryptography.hazmat.primitives.asymmetric import x25519, ec
 from cryptography.hazmat.primitives import hashes, serialization
 
+def _extrair_json_robusto(texto_bruto: str) -> dict:
+    """Extrai o primeiro objeto JSON balanceado da resposta da LLM.
+    Mais robusto que regex `\\{.*\\}` guloso (quebra quando há prosa com `{`)."""
+    start = texto_bruto.find("{")
+    if start == -1:
+        raise ValueError(f"LLM não retornou JSON (início): {texto_bruto[:200]!r}")
+    try:
+        obj, _ = json.JSONDecoder().raw_decode(texto_bruto[start:])
+        return obj
+    except json.JSONDecodeError as e:
+        raise ValueError(f"LLM retornou JSON malformado: {e}. Trecho: {texto_bruto[start:start+200]!r}")
+
+
 URL_LLM = os.getenv("URL_LLM", "http://127.0.0.1:1234/v1/chat/completions")
 URL_MARKETPLACE = os.getenv("URL_MARKETPLACE", "http://127.0.0.1:8000")
 NUM_RUNS = 30
@@ -130,11 +143,17 @@ Retorne APENAS um JSON válido:
     }
     resp_llm = requests.post(URL_LLM, json=payload).json()
     texto_ia = resp_llm['choices'][0]['message']['content'].strip()
-    escolha = json.loads(re.search(r'\{.*\}', texto_ia, re.DOTALL).group(0))
+    escolha = _extrair_json_robusto(texto_ia)
+
+    gold_urls = {l["agentUrl"] for l in relatorio_verificacao if l["verification_result"] == "GOLD"}
+    if escolha.get("selected_agent_url") not in gold_urls:
+        raise RuntimeError(
+            f"[ANS] LLM escolheu agente NÃO-GOLD: {escolha.get('selected_agent_url')}. "
+            f"Bloqueio determinístico aplicado. Candidatos GOLD: {sorted(gold_urls)}"
+        )
 
     print(f"[Agente Solicitante] Agente ANS verificado e selecionado: {escolha['selected_ans_name']}", flush=True)
     return escolha["selected_agent_url"], escolha["selected_ans_name"]
-
 
 def gerar_frame_ldp_via_llm(ordem_natural):
     prompt_sistema_agente2 = """Você é o Agente 2 (Domínio Solicitante).
@@ -156,10 +175,11 @@ Retorne APENAS o JSON válido no formato abaixo:
             {"role": "user", "content": ordem_natural}
         ],
         "temperature": 0.0
-    }
-    resp = requests.post(URL_LLM, json=payload).json()
+    }    
+    
+    resp = requests.post(URL_LLM, json=payload, timeout=120).json()
     texto_ia = resp['choices'][0]['message']['content'].strip()
-    return json.loads(re.search(r'\{.*\}', texto_ia, re.DOTALL).group(0))
+    return _extrair_json_robusto(texto_ia)
 
 
 def rodar_bateria(nome_teste, url_destino, ans_destino, ordem_natural, modo_ataque=None):
