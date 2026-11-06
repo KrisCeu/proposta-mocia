@@ -83,16 +83,34 @@ def verificar_candidato_ans_gold_tier(candidato, root_keys):
     ra_sig_ok = verificar_jws_detached_es256(ra_pub_pem, sig_ra, evento_tl)
 
     host_base = candidato["trustCardUrl"].split("/.well-known")[0]
-    tls_info = requests.get(
-        f"{host_base}/.well-known/ans/tls-cert-info",
-        verify='certs/ca-cert.pem'
-    ).json()
+    client_cert = ('certs/client-cert.pem', 'certs/client-key.pem')
+
+    try:
+        tls_info = requests.get(
+            f"{host_base}/.well-known/ans/tls-cert-info",
+            verify='certs/ca-cert.pem',
+            cert=client_cert,
+            timeout=10,
+        ).json()
+        live_trust_card = requests.get(
+            candidato["trustCardUrl"],
+            verify='certs/ca-cert.pem',
+            cert=client_cert,
+            timeout=10,
+        ).json()
+    except Exception as e:
+        # AHP inalcançável ou handshake recusado → não pode ser GOLD
+        print(f"      -> [ANS] ❌ Candidato {agent_id} inalcançável: {e}", flush=True)
+        return {
+            "ansName": ans_name,
+            "agentUrl": "",
+            "trust_card_hash_match": False,
+            "verification_result": "MISMATCH",
+            "erro": f"{type(e).__name__}: {e}",
+        }
+
     dane_ok = (tls_info["serverCertFingerprint"] == evento_tl["attestations"]["serverCert"]["fingerprint"])
 
-    live_trust_card = requests.get(
-        candidato["trustCardUrl"],
-        verify='certs/ca-cert.pem'
-    ).json()
     live_hash = f"SHA256:{hashlib.sha256(jcs_canonicalize(live_trust_card)).hexdigest()}"
     sealed_hash = evento_tl["attestations"]["agentCardHash"]
     trust_card_integro = (live_hash == sealed_hash)
@@ -103,9 +121,8 @@ def verificar_candidato_ans_gold_tier(candidato, root_keys):
         "ansName": ans_name,
         "agentUrl": live_trust_card["endpoints"][0]["agentUrl"],
         "trust_card_hash_match": trust_card_integro,
-        "verification_result": tier_alcancado
+        "verification_result": tier_alcancado,
     }
-
 
 def descobrir_e_selecionar_agente_via_llm():
     print("=" * 70, flush=True)
@@ -141,7 +158,7 @@ Retorne APENAS um JSON válido:
         ],
         "temperature": 0.0
     }
-    resp_llm = requests.post(URL_LLM, json=payload).json()
+    resp_llm = requests.post(URL_LLM, json=payload, timeout=120).json()
     texto_ia = resp_llm['choices'][0]['message']['content'].strip()
     escolha = _extrair_json_robusto(texto_ia)
 
