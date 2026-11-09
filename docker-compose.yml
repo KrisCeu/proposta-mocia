@@ -1,13 +1,16 @@
 services:
-  llm_host_gateway:
+    llm_host_gateway:
     build: .
     container_name: mocia_llm_gateway
     network_mode: "host"
-    command: >
-      python -c "import requests; from flask import Flask, request, Response;
-      app = Flask(__name__);
-      app.route('/v1/chat/completions', methods=['POST'])(lambda: Response(requests.post('http://127.0.0.1:1234/v1/chat/completions', json=request.json).content, status=200, mimetype='application/json'));
-      app.run(host='0.0.0.0', port=1235)"
+    command: python llm_gateway.py
+    environment:
+      - QWEN_API_KEY=${QWEN_API_KEY}
+      - LLM_UPSTREAM_URL=${LLM_UPSTREAM_URL:-http://100.127.32.71:18080}
+      - LLM_MODEL_OVERRIDE=${LLM_MODEL_OVERRIDE:-qwen3.5:9b-gpu}
+      - LLM_TIMEOUT_S=${LLM_TIMEOUT_S:-300}
+    volumes:
+      - ./llm_gateway.py:/app/llm_gateway.py:ro
 
   ans_marketplace_tl:
     build: .
