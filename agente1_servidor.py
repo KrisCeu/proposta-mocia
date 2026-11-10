@@ -234,7 +234,11 @@ Retorne APENAS um JSON válido com as chaves abaixo, sem texto adicional:
         "llm_autonomous_action": decisao_llm.get("action"),
         "jamjet_enforced_action": auditoria["jamjet_action"],
         "divergencia_llm_jamjet": auditoria["divergencia_detectada"],
-        "amount": decisao_llm.get("amount"),
+        "amount_llm": decisao_llm.get("amount"),
+        "amount_ldp": frame_ldp.get("amount"),
+        "target_llm": decisao_llm.get("target"),       
+        "target_ldp": frame_ldp.get("target"),         
+        "notes_ldp": frame_ldp.get("notes", ""),       
         "reasoning": decisao_llm.get("reasoning"),
         "auditoria_jamjet": auditoria["motivo_jamjet"]
     }

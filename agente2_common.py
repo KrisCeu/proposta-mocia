@@ -276,7 +276,14 @@ def rodar_bateria(nome_teste, url_destino, ans_destino, ordem_natural, modo_ataq
 
             recibo = resposta_http.json().get("recibo", {})
 
-            print(f"    [DEBUG-ACTION {i + 1}] action_decidida='{recibo.get('llm_autonomous_action')}' | notes_no_frame='{frame_ldp.get('notes', '')[:60]}'", flush=True)
+            print(
+                f"    [DEBUG-ACTION {i + 1}] "
+                f"action_llm='{recibo.get('llm_autonomous_action')}' | "
+                f"target_llm='{recibo.get('target_llm')}' | "
+                f"target_ldp='{recibo.get('target_ldp')}' | "
+                f"notes='{frame_ldp.get('notes', '')[:40]}'",
+                flush=True,
+            )
 
             if recibo.get("divergencia_llm_jamjet") is True:
                 llm_errou += 1

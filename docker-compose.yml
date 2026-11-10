@@ -1,5 +1,5 @@
 services:
-    llm_host_gateway:
+  llm_host_gateway:
     build: .
     container_name: mocia_llm_gateway
     network_mode: "host"
