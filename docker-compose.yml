@@ -46,6 +46,7 @@ services:
     volumes:
       - ./jamjet_server.py:/app/jamjet_server.py:ro
       - ./policy.yaml:/app/policy.yaml:ro
+      - ./allowlist.yaml:/app/allowlist.yaml:ro   
     ports:
       - "8004:8004"
     networks:
@@ -112,6 +113,8 @@ services:
     volumes:
       - ./testes.py:/app/testes.py:ro
       - ./agente2_common.py:/app/agente2_common.py:ro
+      - ./testes_infra.py:/app/testes_infra.py:ro
+      - ./testes_avancados.py:/app/testes_avancados.py:ro 
       - ./certs:/app/certs:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"

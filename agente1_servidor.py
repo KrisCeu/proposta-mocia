@@ -14,6 +14,7 @@ app = Flask(__name__)
 
 URL_LLM = os.getenv("URL_LLM", "http://127.0.0.1:1234/v1/chat/completions")
 URL_JAMJET = os.getenv("URL_JAMJET", "http://jamjet_server:8004/audit")
+URL_SAGA_OTK_VERIFY = os.getenv("URL_SAGA_OTK_VERIFY", "http://saga_provider:8003/otk-verify")
 AGENT_ROLE = os.getenv("AGENT_ROLE", "legitimo")
 PORTA_SERVICO = int(os.getenv("PORTA_SERVICO", "8001"))
 CAMINHO_POLICY = os.path.join(os.path.dirname(__file__), "policy.yaml")
@@ -111,11 +112,28 @@ def processar_requisicao_interdominio():
     print("[1/4] Executando Camada 1 (SAGA)...", flush=True)
 
     otk_recebida = dados_recebidos.get("otk")
-    if not otk_recebida or not otk_recebida.startswith("OTK-"):
-        print("      -> [SAGA] BLOQUEIO: OTK inválida ou ausente!", flush=True)
-        return jsonify({"erro": "SAGA: Acesso negado. OTK inválida ou ausente."}), 403
+    if not otk_recebida:
+        print("      -> [SAGA] BLOQUEIO: OTK ausente!", flush=True)
+        return jsonify({"erro": "SAGA: Acesso negado. OTK ausente."}), 403
 
-    print(f"      -> [SAGA] OTK {otk_recebida} validada. Iniciando Diffie-Hellman...", flush=True)
+    # ─── Fix S-2/S-4: valida a OTK junto ao provider (não confia no prefixo) ───
+    try:
+        r_otk = requests.post(
+            URL_SAGA_OTK_VERIFY,
+            json={"otk": otk_recebida},
+            timeout=5,
+        )
+        otk_resp = r_otk.json()
+    except Exception as e:
+        print(f"      -> [SAGA] ❌ ERRO ao validar OTK: {e}. Fail-safe deny.", flush=True)
+        return jsonify({"erro": f"SAGA: provider indisponível ({type(e).__name__})."}), 503
+
+    if r_otk.status_code != 200 or not otk_resp.get("valid"):
+        erro_otk = otk_resp.get("erro", "OTK inválida ou já consumida")
+        print(f"      -> [SAGA] ❌ BLOQUEIO: {erro_otk}", flush=True)
+        return jsonify({"erro": f"SAGA: {erro_otk}."}), 403
+
+    print(f"      -> [SAGA] ✅ OTK {otk_recebida} válida e consumida. Iniciando Diffie-Hellman...", flush=True)
 
     pub_iniciador_bytes = bytes.fromhex(dados_recebidos["saga_pub_key"])
     pub_iniciador = x25519.X25519PublicKey.from_public_bytes(pub_iniciador_bytes)

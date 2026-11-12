@@ -1,0 +1,16 @@
+version: "1.0"
+
+# Lista de destinatários de confiança.
+# Só o JamJet tem acesso a este arquivo.
+# O LLM NÃO recebe este conteúdo no prompt.
+recipients:
+  trusted:
+    - "fornecedor_alfa"
+    - "fornecedor_beta"
+    - "fornecedor_gamma"
+  on_unknown: "require_approval_for"
+  normalize: true
+
+security_controls:
+  on_recipient_inconsistency: "log"
+  on_recipient_typosquat: "deny"

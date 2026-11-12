@@ -1,10 +1,13 @@
 version: "1.0"
 agent_id: "agente-financeiro-destino"
+
 budget_limits:
   max_transaction_value: 200.00
   currency: "BRL"
+
 security_controls:
   on_prompt_injection_or_override: "deny"
+
 rules:
   - tool: "executar_pagamento"
     action: "allow"
