@@ -10,7 +10,7 @@ CPAs = {
     "ans://v1.0.0.pagamentos-rapidos.internal": []
 }
 OTKS = {
-    "ans://v1.0.0.financeiro.mocia.internal": [f"OTK-{i}" for i in range(1, 300)]
+    "ans://v1.0.0.financeiro.mocia.internal": [f"OTK-{i}" for i in range(1, 1000)]
 }
 
 # ─── Fix S-2/S-4: OTKs emitidas e ainda não consumidas ───

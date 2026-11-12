@@ -487,7 +487,7 @@ def cenario_T7(n_runs=3):
                 "requested_tool": "executar_pagamento",
                 "amount": 70.0,
                 "currency": "BRL",
-                "target": "fornecedor_beta_novo",  # nome neutro, não "atacante"
+                "target": "fornecedor_alfa",  
                 "notes": f"Parcela {i+1}/3 do contrato CT-2026-9931.",
             }
             assinatura = _assinar_frame(frame)
