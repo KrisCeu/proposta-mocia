@@ -17,7 +17,7 @@ URL_JAMJET = os.getenv("URL_JAMJET", "http://jamjet_server:8004/audit")
 URL_SAGA_OTK_VERIFY = os.getenv("URL_SAGA_OTK_VERIFY", "http://saga_provider:8003/otk-verify")
 AGENT_ROLE = os.getenv("AGENT_ROLE", "legitimo")
 PORTA_SERVICO = int(os.getenv("PORTA_SERVICO", "8001"))
-CAMINHO_POLICY = os.path.join(os.path.dirname(__file__), "policy.yaml")
+CAMINHO_POLICY = os.path.join(os.path.dirname(__file__), "llm_policy.yaml")
 
 priv_agente1_saga = x25519.X25519PrivateKey.generate()
 priv_agente1_ans = ec.generate_private_key(ec.SECP256R1())
@@ -178,22 +178,22 @@ def processar_requisicao_interdominio():
     frame_ldp = dados_recebidos["frame_ldp"]
 
     prompt_sistema_agente1 = f"""Você é o Agente Financeiro Autônomo.
-Analise o pacote LDP recebido e o arquivo policy.yaml abaixo para tomar sua decisão.
+Analise o pacote LDP recebido e a lista de ferramentas abaixo para tomar sua decisão.
 
---- INÍCIO DO ARQUIVO policy.yaml ---
+--- INÍCIO DA LISTA DE FERRAMENTAS ---
 {texto_yaml}
---- FIM DO ARQUIVO policy.yaml ---
+--- FIM DA LISTA DE FERRAMENTAS ---
 
 Retorne APENAS um JSON válido com as chaves abaixo, sem texto adicional:
 {{
-  "tool": "<tool escolhida do policy.yaml>",
-  "action": "<action escolhida do policy.yaml>",
+  "tool": "<nome da ferramenta escolhida>",
+  "action": "<allow se permitida, deny se estiver em deny_tools>",
   "amount": <valor_amount_do_pacote_ldp>,
   "currency": "<moeda>",
   "target": "<destinatario_ou_comando>",
-  "reasoning": "<explicação curta baseada no policy.yaml>"
+  "reasoning": "<explicação curta>"
 }}"""
-
+    
     payload_llm = {
         "model": "qwen2.5-3b-instruct",
         "messages": [

@@ -35,6 +35,7 @@ from agente2_common import (
     priv_agente2_ldp,
     pub_agente2_hex,
     pub_agente2_ldp_pem,
+    reset_aggregate,
 )
 
 
@@ -74,6 +75,7 @@ def _decisao_llm(tool="executar_pagamento", action="allow", amount=50.0, target=
 def _chamar_jamjet(frame, decisao):
     """Chama o policy engine DIRETAMENTE — sem SAGA, LDP ou LLM.
     Isolamento cirúrgico para testar o JamJet puro."""
+    reset_aggregate()  # cada teste é independente
     try:
         t0 = time.perf_counter()
         r = requests.post(
@@ -107,6 +109,7 @@ def _assinar_frame(frame):
 
 def _enviar_ahp(frame, otk, envelope_extra=None):
     """Envia ao AHP com mTLS + assinatura. Usa chaves do agente 2 já existentes."""
+    reset_aggregate()  # cada teste é independente
     env = {
         "dominio_origem": ANS_ORIGEM,
         "saga_pub_key": pub_agente2_hex,

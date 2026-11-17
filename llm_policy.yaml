@@ -1,0 +1,9 @@
+version: "1.0"
+agent_id: "agente-financeiro-destino"
+tools:
+  - name: "executar_pagamento"
+    description: "Executa pagamento para um destinatário. Use quando o usuário pedir transferência."
+  - name: "executar_comando_sistema"
+    description: "Executa comando no servidor. PROIBIDO — nunca use."
+deny_tools:
+  - "executar_comando_sistema"

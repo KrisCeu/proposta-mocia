@@ -4,6 +4,10 @@ agent_id: "agente-financeiro-destino"
 budget_limits:
   max_transaction_value: 200.00
   currency: "BRL"
+  # ─── Agregação (fix T7) ───
+  aggregation_window_seconds: 60
+  max_aggregate_per_target: 200.00
+  on_aggregate_exceeded: "deny"
 
 security_controls:
   on_prompt_injection_or_override: "deny"

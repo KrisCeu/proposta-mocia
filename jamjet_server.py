@@ -2,6 +2,7 @@ import json
 import os
 import time
 import unicodedata
+import threading
 from datetime import datetime
 from pathlib import Path
 from flask import Flask, request, jsonify
@@ -10,14 +11,17 @@ import yaml
 app = Flask(__name__)
 
 BASE_DIR = Path(__file__).resolve().parent
-POLICY_PATH = BASE_DIR / "policy.yaml"
+POLICY_PATH = BASE_DIR / "jamjet_policy.yaml"
 ALLOWLIST_PATH = BASE_DIR / "allowlist.yaml"
 AUDIT_LOG_PATH = BASE_DIR / "audit_trail.jsonl"
 
 
 # ═══════════════════════════════════════════════════════════════════
-# Carregamento — policy.yaml (LLM lê) vs allowlist.yaml (só JamJet lê)
+# Estado de agregação (fix T7: structuring detection)
 # ═══════════════════════════════════════════════════════════════════
+_AGGREGATE_LOCK = threading.Lock()
+_AGGREGATE_STATE = {}  # {(target_norm, window_bucket): {"sum": float, "count": int}}
+
 
 def _load_yaml(path: Path) -> dict:
     try:
@@ -30,7 +34,7 @@ def _load_yaml(path: Path) -> dict:
 
 
 def carregar_politica() -> dict:
-    """Lê policy.yaml. Este é o mesmo conteúdo que a LLM recebe no prompt."""
+    """Lê jamjet_policy.yaml. Exclusivo do JamJet — a LLM não vê este arquivo."""
     policy = _load_yaml(POLICY_PATH)
     if not policy:
         return {"budget_limits": {"max_transaction_value": 200.00}, "rules": []}
@@ -54,7 +58,7 @@ def registrar_trilha_auditoria(tool_name: str, args: dict, decisao: dict) -> Non
 
 
 # ═══════════════════════════════════════════════════════════════════
-# Helpers de normalização e comparação
+# Helpers
 # ═══════════════════════════════════════════════════════════════════
 
 def _normalizar(s: str) -> str:
@@ -79,8 +83,23 @@ def _levenshtein(a: str, b: str) -> int:
     return prev[-1]
 
 
+def _safe_float(value, default=None):
+    """Converte para float, ou retorna default se não for numérico.
+    Evita HTTP 500 quando a LLM retorna amount=null ou string não-numérica."""
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _get_window_bucket(window_seconds: int) -> int:
+    """Retorna o índice do bucket temporal atual.
+    Transações no mesmo bucket caem na mesma janela de agregação."""
+    return int(time.time() // max(1, window_seconds))
+
+
 # ═══════════════════════════════════════════════════════════════════
-# Checagens que usam allowlist (só JamJet conhece)
+# Checagens com allowlist
 # ═══════════════════════════════════════════════════════════════════
 
 def _checar_recipient(target: str, allowlist_dict: dict):
@@ -167,19 +186,90 @@ def _checar_consistencia_notes_target(target_llm: str, frame_ldp: dict, allowlis
 
 
 # ═══════════════════════════════════════════════════════════════════
+# Agregação por destinatário/janela (fix T7)
+# ═══════════════════════════════════════════════════════════════════
+
+def _checar_agregacao_pre(target: str, amount: float, policy_dict: dict):
+    """
+    Verifica (sem incrementar) se a transação estouraria o teto agregado
+    por destinatário na janela temporal configurada.
+
+    Retorna dict JamJet se estourar, senão None.
+    """
+    limits = policy_dict.get("budget_limits", {})
+    max_agg = limits.get("max_aggregate_per_target")
+    if max_agg is None:
+        return None  # agregação desabilitada
+
+    window_s = int(limits.get("aggregation_window_seconds", 60))
+    on_exceed = limits.get("on_aggregate_exceeded", "deny")
+
+    target_key = _normalizar(target)
+    bucket = _get_window_bucket(window_s)
+    key = (target_key, bucket)
+
+    with _AGGREGATE_LOCK:
+        current = _AGGREGATE_STATE.get(key, {"sum": 0.0, "count": 0})
+        novo_total = current["sum"] + amount
+
+        if novo_total > float(max_agg):
+            return {
+                "jamjet_action": on_exceed,
+                "divergencia_detectada": False,
+                "motivo_jamjet": (
+                    f"STRUCTURING DETECTADO: transação de R$ {amount:.2f} "
+                    f"para '{target}' somaria R$ {novo_total:.2f} na janela de "
+                    f"{window_s}s (teto agregado: R$ {float(max_agg):.2f}). "
+                    f"Histórico na janela: {current['count']} tx, R$ {current['sum']:.2f}."
+                ),
+            }
+    return None
+
+
+def _registrar_agregado(target: str, amount: float, policy_dict: dict) -> None:
+    """Incrementa o agregado APÓS decisão 'allow'. Nunca chamado para deny/require_approval."""
+    limits = policy_dict.get("budget_limits", {})
+    if limits.get("max_aggregate_per_target") is None:
+        return
+
+    window_s = int(limits.get("aggregation_window_seconds", 60))
+    target_key = _normalizar(target)
+    bucket = _get_window_bucket(window_s)
+    key = (target_key, bucket)
+
+    with _AGGREGATE_LOCK:
+        current = _AGGREGATE_STATE.get(key, {"sum": 0.0, "count": 0})
+        _AGGREGATE_STATE[key] = {
+            "sum": current["sum"] + amount,
+            "count": current["count"] + 1,
+        }
+
+
+# ═══════════════════════════════════════════════════════════════════
 # Função principal de auditoria
 # ═══════════════════════════════════════════════════════════════════
 
 def auditar_com_jamjet(policy_dict, allowlist_dict, frame_ldp, decisao_llm):
     tool_llm = decisao_llm.get("tool")
     action_llm = decisao_llm.get("action")
-    amount_llm = float(decisao_llm.get("amount", 0))
-    amount_ldp = float(frame_ldp.get("amount", 0))
     target_llm = decisao_llm.get("target")
     target_ldp = frame_ldp.get("target")
     tool_ldp = frame_ldp.get("requested_tool")
 
-    # ─── Camada 0: sinal ───
+    # ─── Camada 0: conversão segura de amount + sinal ───
+    amount_llm = _safe_float(decisao_llm.get("amount"), default=None)
+    amount_ldp = _safe_float(frame_ldp.get("amount"), default=None)
+
+    if amount_llm is None or amount_ldp is None:
+        return {
+            "jamjet_action": "deny",
+            "divergencia_detectada": True,
+            "motivo_jamjet": (
+                f"ENTRADA INVÁLIDA: amount não numérico "
+                f"(LLM={decisao_llm.get('amount')!r}, LDP={frame_ldp.get('amount')!r})."
+            ),
+        }
+
     if amount_llm < 0 or amount_ldp < 0:
         return {
             "jamjet_action": "deny",
@@ -212,7 +302,12 @@ def auditar_com_jamjet(policy_dict, allowlist_dict, frame_ldp, decisao_llm):
     if check_consist is not None:
         return check_consist
 
-    # ─── Camada 4: policy engine (amount/tool) ───
+    # ─── Camada 4: agregação por destinatário/janela (fix T7) ───
+    check_agg = _checar_agregacao_pre(target_llm, amount_llm, policy_dict)
+    if check_agg is not None:
+        return check_agg
+
+    # ─── Camada 5: policy engine (amount/tool) ───
     acao_esperada = "deny"
     for regra in policy_dict.get("rules", []):
         if regra.get("tool") == tool_llm:
@@ -234,6 +329,10 @@ def auditar_com_jamjet(policy_dict, allowlist_dict, frame_ldp, decisao_llm):
         if not divergencia else
         f"CONTENÇÃO JAMJET: A LLM tentou '{action_llm}', mas a regra exige '{acao_esperada}'."
     )
+
+    # ─── Incrementa agregado APÓS decisão final (só se allow) ───
+    if acao_esperada == "allow":
+        _registrar_agregado(target_llm, amount_llm, policy_dict)
 
     return {
         "jamjet_action": acao_esperada,
@@ -283,6 +382,21 @@ def audit_tool_call():
         "motivo_jamjet": resultado["motivo_jamjet"],
         "eval_latency_ms": round(latencia_ms, 3),
     })
+
+
+@app.route("/admin/reset-aggregate", methods=["POST"])
+def reset_aggregate():
+    """
+    Reseta o estado de agregação. Usado pelos testes para garantir que cada
+    iteração seja avaliada independentemente (sem herdar o agregado de runs anteriores).
+
+    Em produção, este endpoint deve ser protegido (auth + restrito a loopback).
+    Aqui é aberto porque é um PoC e o JamJet não é exposto externamente.
+    """
+    global _AGGREGATE_STATE
+    with _AGGREGATE_LOCK:
+        _AGGREGATE_STATE = {}
+    return jsonify({"status": "ok", "aggregate_state": "cleared"})
 
 
 @app.route("/health", methods=["GET"])

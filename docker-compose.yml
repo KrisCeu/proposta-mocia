@@ -45,7 +45,7 @@ services:
       - PORTA_JAMJET=8004
     volumes:
       - ./jamjet_server.py:/app/jamjet_server.py:ro
-      - ./policy.yaml:/app/policy.yaml:ro
+      - ./jamjet_policy.yaml:/app/jamjet_policy.yaml:ro
       - ./allowlist.yaml:/app/allowlist.yaml:ro   
     ports:
       - "8004:8004"
@@ -63,7 +63,7 @@ services:
       - URL_JAMJET=http://jamjet_server:8004/audit
     volumes:
       - ./agente1_servidor.py:/app/agente1_servidor.py:ro
-      - ./policy.yaml:/app/policy.yaml:ro
+      - ./llm_policy.yaml:/app/llm_policy.yaml:ro
       - ./certs:/app/certs:ro
     ports:
       - "8002:8002"
@@ -85,7 +85,7 @@ services:
       - URL_JAMJET=http://jamjet_server:8004/audit
     volumes:
       - ./agente1_servidor.py:/app/agente1_servidor.py:ro
-      - ./policy.yaml:/app/policy.yaml:ro
+      - ./llm_policy.yaml:/app/llm_policy.yaml:ro
       - ./certs:/app/certs:ro
     ports:
       - "8001:8001"
