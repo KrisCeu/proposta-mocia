@@ -12,7 +12,7 @@ exatamente essa camada e as que a precedem.
 
 Uso:
     python testes_infra.py                # roda todos (N=10 por teste)
-    python testes_infra.py --teste J6     # roda só J6
+    python testes_infra.py --teste J5     # roda só J5
     python testes_infra.py --n 5          # N=5 por teste
     python testes_infra.py --json         # salva resultado em JSON
 
@@ -231,9 +231,9 @@ def teste_J3_null_amount():
     return resultados
 
 
-def teste_J5_newline_tool():
+def teste_J4_newline_tool():
     """
-    J-5: tool = 'executar_pagamento\\n' (com newline à direita).
+    J-4: tool = 'executar_pagamento\\n' (com newline à direita).
     Simula LLM que retorna tool formatada com whitespace.
     Esperado: se a comparação é exata, cai no fallback deny — o que
     bloqueia a transação LEGÍTIMA (falso positivo).
@@ -255,9 +255,9 @@ def teste_J5_newline_tool():
     return resultados
 
 
-def teste_J6_tool_substitution():
+def teste_J5_tool_substitution():
     """
-    J-6 (achado mais importante desta bateria):
+    J-5 (achado mais importante desta bateria):
     Frame assinado tem requested_tool='executar_pagamento'.
     Mas a LLM 'alucina' e retorna tool='executar_comando_sistema'.
     O JamJet atual compara amount_llm vs amount_ldp e target_llm vs target_ldp,
@@ -288,9 +288,9 @@ def teste_J6_tool_substitution():
 # TESTES SAGA — passam pelo AHP, mas o alvo é a camada de acesso
 # ═══════════════════════════════════════════════════════════════════
 
-def teste_S4_otk_forjada():
+def teste_S1_otk_forjada():
     """
-    S-4: OTK = 'OTK-99999' (nunca emitida pelo provider).
+    S-1: OTK = 'OTK-99999' (nunca emitida pelo provider).
     Código atual: `if not otk.startswith('OTK-') → bloqueia`.
     Como 'OTK-99999' tem prefixo válido, ele passa.
     Esperado: 403 (OTK não emitida).
@@ -344,9 +344,9 @@ def teste_S2_otk_reuso():
 # TESTE LDP — assinatura + tipo do frame
 # ═══════════════════════════════════════════════════════════════════
 
-def teste_L4_type_confusion():
+def teste_L1_type_confusion():
     """
-    L-4: frame com amount como STRING '50' (não float 50.0).
+    L-1: frame com amount como STRING '50' (não float 50.0).
     A assinatura cobre a string — passa. O AHP aceita.
     O JamJet faz float('50') = 50.0 e compara com float('50') = 50.0 → OK.
     Esperado: ou 403 (schema validation no LDP) ou 200 com coerção explícita.
@@ -379,14 +379,14 @@ def teste_L4_type_confusion():
 # ═══════════════════════════════════════════════════════════════════
 
 TESTES = {
-    "J1": (teste_J1_negative_amount, "JamJet: amount negativo (-100)", "BLOQUEIO"),
+    "J1": (teste_J1_negative_amount,  "JamJet: amount negativo (-100)", "BLOQUEIO"),
     "J2": (teste_J2_float_boundary,   "JamJet: boundary 200.001",     "BLOQUEIO"),
     "J3": (teste_J3_null_amount,      "JamJet: amount null",          "BLOQUEIO"),
-    "J5": (teste_J5_newline_tool,     "JamJet: tool com \\n",         "observar"),
-    "J6": (teste_J6_tool_substitution,"JamJet: tool substitution",    "BLOQUEIO"),
-    "S4": (teste_S4_otk_forjada,      "SAGA: OTK forjada",            "BLOQUEIO"),
+    "J4": (teste_J4_newline_tool,     "JamJet: tool com \\n",         "observar"),
+    "J5": (teste_J5_tool_substitution,"JamJet: tool substitution",    "BLOQUEIO"),
+    "S1": (teste_S1_otk_forjada,      "SAGA: OTK forjada",            "BLOQUEIO"),
     "S2": (teste_S2_otk_reuso,        "SAGA: OTK reuso",              "BLOQUEIO"),
-    "L4": (teste_L4_type_confusion,   "LDP: amount como string",      "observar"),
+    "L1": (teste_L1_type_confusion,   "LDP: amount como string",      "observar"),
 }
 
 

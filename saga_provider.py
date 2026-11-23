@@ -13,9 +13,9 @@ OTKS = {
     "ans://v1.0.0.financeiro.mocia.internal": [f"OTK-{i}" for i in range(1, 1000)]
 }
 
-# ─── Fix S-2/S-4: OTKs emitidas e ainda não consumidas ───
+# ─── Fix S-1/S-2: OTKs emitidas e ainda não consumidas ───
 # Quando o AHP consome via /otk-verify, a OTK é removida daqui.
-# - Se OTK não está aqui → nunca emitida OU já consumida → 403 (cobre S-4 e S-2).
+# - Se OTK não está aqui → nunca emitida OU já consumida → 403 (cobre S-1 e S-2).
 OTKS_ATIVAS = set()
 _otk_lock = threading.Lock()
 
@@ -46,7 +46,7 @@ def otk_verify():
     """Consome uma OTK. Retorna valid=True apenas no primeiro uso.
 
     Chamado pelo AHP para validar a OTK recebida do solicitante.
-    - OTK nunca emitida pelo provider → 403 (fix S-4)
+    - OTK nunca emitida pelo provider → 403 (fix S-1)
     - OTK já consumida por um AHP anterior → 403 (fix S-2)
     """
     dados = request.json or {}

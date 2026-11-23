@@ -46,7 +46,7 @@ services:
     volumes:
       - ./jamjet_server.py:/app/jamjet_server.py:ro
       - ./jamjet_policy.yaml:/app/jamjet_policy.yaml:ro
-      - ./allowlist.yaml:/app/allowlist.yaml:ro   
+      - ./allowlist.yaml:/app/allowlist.yaml:ro
     ports:
       - "8004:8004"
     networks:
@@ -99,6 +99,10 @@ services:
   agente_solicitante_verifier:
     build: .
     container_name: mocia_agente_solicitante
+    # Roda com o UID/GID do usuário do host, para que os arquivos gerados em
+    # ./resultados pertençam a você (e não ao root). Defina UID/GID no .env:
+    #   printf "UID=$(id -u)\nGID=$(id -g)\n" >> .env
+    user: "${UID:-1000}:${GID:-1000}"
     command: bash -c "sleep 4 && python testes.py"
     depends_on:
       - llm_host_gateway
@@ -110,11 +114,17 @@ services:
     environment:
       - URL_MARKETPLACE=http://ans_marketplace_tl:8000
       - URL_LLM=http://host.docker.internal:1235/v1/chat/completions
+      - PYTHONDONTWRITEBYTECODE=1   # sem __pycache__ (/app é do root na imagem)
+      - HOME=/tmp                   # usuário sem home no container
     volumes:
       - ./testes.py:/app/testes.py:ro
       - ./agente2_common.py:/app/agente2_common.py:ro
       - ./testes_infra.py:/app/testes_infra.py:ro
-      - ./testes_avancados.py:/app/testes_avancados.py:ro 
+      - ./testes_avancados.py:/app/testes_avancados.py:ro
+      # metricas.py: classificador e métricas AgentDojo, importado por testes_avancados.py
+      - ./metricas.py:/app/metricas.py:ro
+      # resultados/: JSON exportado pelos testes avançados (gravável, persiste no host)
+      - ./resultados:/app/resultados
       - ./certs:/app/certs:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"

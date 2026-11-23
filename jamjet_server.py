@@ -17,10 +17,33 @@ AUDIT_LOG_PATH = BASE_DIR / "audit_trail.jsonl"
 
 
 # ═══════════════════════════════════════════════════════════════════
-# Estado de agregação (fix T7: structuring detection)
+# Estado de agregação (fix T5: structuring detection)
 # ═══════════════════════════════════════════════════════════════════
 _AGGREGATE_LOCK = threading.Lock()
 _AGGREGATE_STATE = {}  # {(target_norm, window_bucket): {"sum": float, "count": int}}
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Overrides de configuração em runtime (experimento T8)
+# ═══════════════════════════════════════════════════════════════════
+# Permite ao runner de testes alternar controles de segurança SEM editar
+# allowlist.yaml (montado read-only) nem reiniciar o container, garantindo
+# que as duas configurações comparadas rodem contra o mesmo processo.
+# Só chaves desta whitelist podem ser sobrescritas, e só com valores válidos.
+_OVERRIDE_LOCK = threading.Lock()
+_OVERRIDES = {}  # {"security_controls.on_recipient_inconsistency": "deny"}
+_OVERRIDES_PERMITIDOS = {
+    "security_controls.on_recipient_inconsistency": {"log", "deny", "require_approval_for"},
+}
+
+
+def _aplicar_overrides(allowlist_dict: dict) -> dict:
+    with _OVERRIDE_LOCK:
+        overrides = dict(_OVERRIDES)
+    for chave, valor in overrides.items():
+        secao, campo = chave.split(".", 1)
+        allowlist_dict.setdefault(secao, {})[campo] = valor
+    return allowlist_dict
 
 
 def _load_yaml(path: Path) -> dict:
@@ -42,8 +65,9 @@ def carregar_politica() -> dict:
 
 
 def carregar_allowlist() -> dict:
-    """Lê allowlist.yaml. Exclusivo do JamJet — não vai para o prompt da LLM."""
-    return _load_yaml(ALLOWLIST_PATH)
+    """Lê allowlist.yaml e aplica overrides de runtime (se houver).
+    Exclusivo do JamJet — não vai para o prompt da LLM."""
+    return _aplicar_overrides(_load_yaml(ALLOWLIST_PATH))
 
 
 def registrar_trilha_auditoria(tool_name: str, args: dict, decisao: dict) -> None:
@@ -186,7 +210,7 @@ def _checar_consistencia_notes_target(target_llm: str, frame_ldp: dict, allowlis
 
 
 # ═══════════════════════════════════════════════════════════════════
-# Agregação por destinatário/janela (fix T7)
+# Agregação por destinatário/janela (fix T5)
 # ═══════════════════════════════════════════════════════════════════
 
 def _checar_agregacao_pre(target: str, amount: float, policy_dict: dict):
@@ -302,7 +326,7 @@ def auditar_com_jamjet(policy_dict, allowlist_dict, frame_ldp, decisao_llm):
     if check_consist is not None:
         return check_consist
 
-    # ─── Camada 4: agregação por destinatário/janela (fix T7) ───
+    # ─── Camada 4: agregação por destinatário/janela (fix T5) ───
     check_agg = _checar_agregacao_pre(target_llm, amount_llm, policy_dict)
     if check_agg is not None:
         return check_agg
@@ -359,6 +383,9 @@ def audit_tool_call():
 
     latencia_ms = (time.perf_counter() - t_inicio) * 1000
 
+    with _OVERRIDE_LOCK:
+        overrides_ativos = dict(_OVERRIDES)
+
     registrar_trilha_auditoria(
         tool_name=decisao_llm.get("tool", "desconhecida"),
         args={
@@ -373,6 +400,7 @@ def audit_tool_call():
             "divergencia_detectada": resultado["divergencia_detectada"],
             "motivo_jamjet": resultado["motivo_jamjet"],
             "eval_latency_ms": round(latencia_ms, 3),
+            "overrides_ativos": overrides_ativos,
         },
     )
 
@@ -397,6 +425,45 @@ def reset_aggregate():
     with _AGGREGATE_LOCK:
         _AGGREGATE_STATE = {}
     return jsonify({"status": "ok", "aggregate_state": "cleared"})
+
+
+@app.route("/admin/override", methods=["GET", "POST", "DELETE"])
+def admin_override():
+    """
+    Overrides de configuração em runtime, usados pelo experimento T8 para
+    comparar on_recipient_inconsistency=log vs deny no mesmo processo.
+
+      GET    → lista overrides ativos
+      POST   {"security_controls.on_recipient_inconsistency": "deny"} → aplica
+      DELETE → remove todos (volta ao allowlist.yaml)
+
+    Mesma ressalva do reset-aggregate: em produção exigiria auth + loopback.
+    """
+    if request.method == "DELETE":
+        with _OVERRIDE_LOCK:
+            _OVERRIDES.clear()
+        return jsonify({"status": "ok", "overrides": {}})
+
+    if request.method == "POST":
+        dados = request.get_json(silent=True) or {}
+        erros = {}
+        aceitos = {}
+        for chave, valor in dados.items():
+            validos = _OVERRIDES_PERMITIDOS.get(chave)
+            if validos is None:
+                erros[chave] = "chave não permitida"
+            elif valor not in validos:
+                erros[chave] = f"valor inválido (use {sorted(validos)})"
+            else:
+                aceitos[chave] = valor
+        if erros:
+            return jsonify({"status": "erro", "erros": erros}), 400
+        with _OVERRIDE_LOCK:
+            _OVERRIDES.update(aceitos)
+
+    with _OVERRIDE_LOCK:
+        atuais = dict(_OVERRIDES)
+    return jsonify({"status": "ok", "overrides": atuais})
 
 
 @app.route("/health", methods=["GET"])

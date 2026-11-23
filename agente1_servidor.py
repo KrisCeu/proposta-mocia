@@ -116,7 +116,7 @@ def processar_requisicao_interdominio():
         print("      -> [SAGA] BLOQUEIO: OTK ausente!", flush=True)
         return jsonify({"erro": "SAGA: Acesso negado. OTK ausente."}), 403
 
-    # ─── Fix S-2/S-4: valida a OTK junto ao provider (não confia no prefixo) ───
+    # ─── Fix S-1/S-2: valida a OTK junto ao provider (não confia no prefixo) ───
     try:
         r_otk = requests.post(
             URL_SAGA_OTK_VERIFY,
@@ -193,7 +193,7 @@ Retorne APENAS um JSON válido com as chaves abaixo, sem texto adicional:
   "target": "<destinatario_ou_comando>",
   "reasoning": "<explicação curta>"
 }}"""
-    
+
     payload_llm = {
         "model": "qwen2.5-3b-instruct",
         "messages": [
@@ -254,9 +254,9 @@ Retorne APENAS um JSON válido com as chaves abaixo, sem texto adicional:
         "divergencia_llm_jamjet": auditoria["divergencia_detectada"],
         "amount_llm": decisao_llm.get("amount"),
         "amount_ldp": frame_ldp.get("amount"),
-        "target_llm": decisao_llm.get("target"),       
-        "target_ldp": frame_ldp.get("target"),         
-        "notes_ldp": frame_ldp.get("notes", ""),       
+        "target_llm": decisao_llm.get("target"),
+        "target_ldp": frame_ldp.get("target"),
+        "notes_ldp": frame_ldp.get("notes", ""),
         "reasoning": decisao_llm.get("reasoning"),
         "auditoria_jamjet": auditoria["motivo_jamjet"]
     }
